@@ -7,14 +7,16 @@ Dự án Lab 3 triển khai hệ thống monitoring, logging và alerting cho AP
 ## Công nghệ sử dụng
 
 ### Monitoring Stack
-- **SigNoz**: All-in-one observability platform
-- **ClickHouse**: Database lưu trữ metrics, logs, traces
+- **SigNoz v0.87.0**: All-in-one observability platform
+- **ClickHouse 24.1.2**: Database lưu trữ metrics, logs, traces
 - **OpenTelemetry**: Instrumentation library
+- **Zookeeper 3.7.1**: Service coordination
 
 ### Application Stack
-- **FastAPI**: Web framework với OpenTelemetry integration
-- **Scikit-learn**: ML model đã train từ lab 1 sẵn (Random Forest)
-- **Docker & Docker Compose**: Container orchestration
+- **FastAPI 0.104.1**: Web framework với OpenTelemetry integration
+- **Scikit-learn 1.3.2**: ML model (Random Forest pre-trained)
+- **Docker 20.10+**: Container runtime
+- **Docker Compose 2.0+**: Container orchestration
 
 ## Yêu cầu hệ thống
 
@@ -23,88 +25,203 @@ Dự án Lab 3 triển khai hệ thống monitoring, logging và alerting cho AP
 - **RAM**: Tối thiểu 4GB (khuyến nghị 8GB)
 - **Disk**: Tối thiểu 5GB free space
 - **Network**: Internet để download images lần đầu
-- **Git**: Để clone SigNoz repository
+- **Git**: Để clone repositories
+- **Python**: 3.11+ (cho traffic generator scripts)
 
-## Hướng dẫn cài đặt và chạy
+## Cài đặt môi trường
 
-### 1. Clone repositories
+### 1. Clone Project
 
 ```bash
-# Clone Lab 3 project
+# Clone project chính
 git clone https://github.com/MTQV002/CS317-Lab3-SigNoz.git
 cd CS317-Lab3-SigNoz
 
-# Clone SigNoz riêng biệt (QUAN TRỌNG!)
-git clone https://github.com/SigNoz/signoz.git
-```
-
-**Cấu trúc thư mục sau khi clone:**
-```
+# Cấu trúc project
 CS317-Lab3-SigNoz/
-├── app/                    # FastAPI application
-├── scripts/               # Traffic generator, error simulator
-├── docker-compose.yml     # Main services
-├── requirements.txt       # Python dependencies
-├── signoz/               # SigNoz repository (git cloned)
-│   ├── deploy/
-│   ├── docker/
-│   └── ...
-└── README.md
+├── docker-compose.yml      # API service configuration
+├── main.py                 # FastAPI application với OpenTelemetry
+├── requirements.txt        # Python dependencies với version cụ thể
+├── Dockerfile             # API container image
+├── best_rf_model.pkl      # Pre-trained Random Forest model
+├── scripts/               # Traffic generators và utilities
+│   ├── traffic_generator.py
+│   └── error_simulator.py
+├── logs/                  # Application logs directory
+└── README.md             # Documentation
 ```
 
-### 2. Setup SigNoz
+### 2. Setup SigNoz (One-time)
+
+```bash
+# Clone SigNoz repository
+git clone -b main https://github.com/SigNoz/signoz.git
+
+# Verify SigNoz structure
+ls signoz/deploy/docker/
+# Should show: docker-compose.yaml, otel-collector-config.yaml, etc.
+```
+
+### 3. Phiên bản thư viện cụ thể
+
+#### Python Dependencies (requirements.txt):
+```txt
+fastapi==0.104.1
+uvicorn==0.24.0
+pydantic==2.5.0
+scikit-learn==1.3.2
+pandas==2.1.4
+joblib==1.3.2
+psutil==5.9.6
+requests==2.31.0
+
+# OpenTelemetry packages
+opentelemetry-api==1.21.0
+opentelemetry-sdk==1.21.0
+opentelemetry-instrumentation==0.42b0
+opentelemetry-instrumentation-fastapi==0.42b0
+opentelemetry-instrumentation-requests==0.42b0
+opentelemetry-exporter-otlp-proto-grpc==1.21.0
+opentelemetry-exporter-otlp-proto-http==1.21.0
+```
+
+#### Docker Images với version cụ thể:
+```yaml
+# SigNoz Services
+signoz/signoz:v0.87.0                        # Query service + Web UI
+signoz/signoz-otel-collector:v0.111.42       # OpenTelemetry Collector
+clickhouse/clickhouse-server:24.1.2-alpine   # Database
+bitnami/zookeeper:3.7.1                      # Coordination service
+
+# Application  
+python:3.11-slim                             # Base image cho API
+```
+
+## Khởi chạy hệ thống
+
+### Bước 1: Start SigNoz Backend Services
 
 ```bash
 # Di chuyển vào thư mục SigNoz
 cd signoz
 
-# Chạy SigNoz setup script
-./deploy/docker/clickhouse-setup/deploy.sh
+# Start SigNoz services (first time takes 2-3 minutes)
+docker-compose -f deploy/docker/docker-compose.yaml up -d
 
-# Quay lại thư mục chính
+# Verify SigNoz startup
+echo "Waiting for SigNoz to fully start..."
+sleep 120
+
+# Check SigNoz services
+docker-compose -f deploy/docker/docker-compose.yaml ps
+
+# Expected output:
+# NAME                    STATUS                   PORTS
+# signoz                  Up (healthy)            0.0.0.0:8080->8080/tcp
+# signoz-clickhouse       Up (healthy)            8123/tcp, 9000/tcp
+# signoz-otel-collector   Up                      0.0.0.0:4317-4318->4317-4318/tcp
+# signoz-zookeeper-1      Up (healthy)            2181/tcp, 2888/tcp, 3888/tcp
+
+# Return to project directory
 cd ..
 ```
 
-**⏱️ Thời gian setup SigNoz**: 5-10 phút (download images + setup database)
-
-### 3. Khởi chạy Titanic API
+### Bước 2: Start Titanic API
 
 ```bash
-# Khởi động API services
+# Build và start API service
 docker-compose up -d
 
-# Theo dõi quá trình khởi động
-docker-compose logs -f
+# Verify API startup
+sleep 30
+docker-compose ps
+
+# Expected output:
+# NAME                    STATUS                   PORTS
+# titanic-api             Up (healthy)            0.0.0.0:8000->8000/tcp
 ```
 
-### 4. Kiểm tra services đang chạy
+### Bước 3: Verify Complete Setup
 
 ```bash
-# Kiểm tra SigNoz services
-cd signoz && docker-compose ps
+# Check all running containers
+docker ps --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
 
-# Kiểm tra API services  
-cd .. && docker-compose ps
-
-# Kiểm tra health của API
-curl http://localhost:8000/health
+# Expected complete setup:
+# NAME                    STATUS                   PORTS
+# titanic-api             Up (healthy)            0.0.0.0:8000->8000/tcp
+# signoz                  Up (healthy)            0.0.0.0:8080->8080/tcp
+# signoz-otel-collector   Up                      0.0.0.0:4317-4318->4317-4318/tcp
+# signoz-clickhouse       Up (healthy)            8123/tcp, 9000/tcp
+# signoz-zookeeper-1      Up (healthy)            2181/tcp, 2888/tcp, 3888/tcp
 ```
 
-### 5. Truy cập các interfaces
+### Bước 4: Test Connectivity
 
-| Service | URL | Mô tả |
-|---------|-----|-------|
-| **SigNoz Dashboard** | http://localhost:3301 | Main monitoring interface |
-| **API Docs** | http://localhost:8000/docs | FastAPI Swagger UI |
-| **Health Check** | http://localhost:8000/health | API status |
-| **ClickHouse** | http://localhost:8123 | Database interface (optional) |
+```bash
+# Test API health
+curl http://localhost:8000/health
+
+# Expected response:
+# {
+#   "status": "healthy",
+#   "timestamp": "2024-06-11T...",
+#   "service": "titanic-api",
+#   "version": "1.0.0",
+#   "system": {...}
+# }
+
+# Test SigNoz Web UI
+curl -s http://localhost:8080 | head -10
+
+# Should return HTML content
+```
+
+## Access Interfaces
+
+| Service | URL | Description | Status |
+|---------|-----|-------------|--------|
+| **🎯 SigNoz Dashboard** | http://localhost:8080 | Complete monitoring interface | ✅ Main Interface |
+| **📚 API Documentation** | http://localhost:8000/docs | FastAPI Swagger UI | ✅ Working |
+| **❤️ Health Check** | http://localhost:8000/health | API status endpoint | ✅ Working |
+| **🗄️ ClickHouse** | http://localhost:8123 | Database interface | ✅ Working |
+
+## Architecture Overview
+
+```
+Final Architecture (Simplified)
+┌─────────────────────────────────────────────────────────────┐
+│                    SigNoz Platform                         │
+│  ┌─────────────────┐    ┌──────────────────┐    ┌─────────┐│
+│  │   ClickHouse    │◄───│  OTel Collector  │◄───│ Signoz  ││
+│  │   (Database)    │    │   (Port 4317)    │    │Web UI   ││
+│  │                 │    │                  │    │Port 8080││
+│  └─────────────────┘    └──────────────────┘    └─────────┘│
+└─────────────────────────────────────────┬───────────────────┘
+                                          │
+                              ┌───────────▼───────────┐
+                              │     Titanic API       │
+                              │     (Port 8000)       │
+                              │   OpenTelemetry       │
+                              │   Instrumented        │
+                              └───────────────────────┘
+```
+
+**Existing SigNoz Services (from signoz/ folder):**
+- signoz (Query Service + Web UI - port 8080) 
+- `signoz-clickhouse` (Database storage)
+- `signoz-otel-collector` (Metrics/Traces/Logs collector - port 4317)
+- `signoz-zookeeper-1` (Service coordination)
+
+**Added API Service (from main docker-compose.yml):**
+- `titanic-api` (FastAPI application - port 8000)
 
 ## Demo và Testing
 
-### 1. Kiểm tra API hoạt động
+### 1. Manual API Testing
 
 ```bash
-# Test prediction endpoint
+# Test single prediction
 curl -X POST "http://localhost:8000/predict" \
   -H "Content-Type: application/json" \
   -d '{
@@ -116,318 +233,194 @@ curl -X POST "http://localhost:8000/predict" \
     "Fare": 7.25,
     "Embarked": "S"
   }'
+
+# Expected response:
+# {
+#   "prediction": "Không sống sót",
+#   "confidence": 0.892,
+#   "processing_time": 0.045,
+#   "probabilities": {
+#     "not_survived": 0.892,
+#     "survived": 0.108
+#   },
+#   "service": "titanic-api",
+#   "timestamp": "2024-06-11T..."
+# }
 ```
 
-### 2. Chạy Traffic Generator
+### 2. Traffic Generator Script
 
 ```bash
-# Cài đặt dependencies
-pip install requests
+# Install dependencies (phiên bản cụ thể)
+pip install requests==2.31.0
 
-# Chạy traffic generator
+# Run traffic generator
 python scripts/traffic_generator.py
+
+# Script configuration:
+# - Duration: 5 minutes
+# - Rate: ~3 requests/second
+# - Mix: 80% normal predictions, 10% errors, 10% slow requests
+# - Real-time progress display
+# - Auto-stop after duration
 ```
 
-**Script sẽ:**
-- Gửi ~3 requests/second trong 5 phút
-- 80% normal predictions, 10% errors, 10% slow requests
-- Hiển thị realtime progress
-- Tự động dừng sau 5 phút
+**Script output sample:**
+```
+🚀 Starting Traffic Generator...
+📊 Configuration:
+   - Duration: 300 seconds
+   - Rate: 3 requests/second
+   - Target: http://localhost:8000
 
-### 3. Chạy Error Simulator
+⏱️  [00:15] Requests: 45 | Success: 36 (80%) | Errors: 5 (11%) | Slow: 4 (9%)
+⏱️  [00:30] Requests: 90 | Success: 72 (80%) | Errors: 9 (10%) | Slow: 9 (10%)
+...
+✅ Traffic generation completed!
+```
+
+### 3. Error Simulation Script
 
 ```bash
-# Chạy error simulator
+# Run error simulator
 python scripts/error_simulator.py
-```
 
-**Monitoring trong Dashboard:**
-1. **Error Rate Panel**: Sẽ spike lên >50%
-2. **Error Logs**: Filter level="ERROR" trong Logs tab
-3. **Alert Triggers**: Nếu đã cấu hình alerts
-4. **Trace Analysis**: Error traces visible trong Traces tab
+# Script behavior:
+# - Generates 50+ error requests rapidly
+# - Triggers /simulate_error endpoint
+# - Causes error rate spike >50%
+# - Monitors dashboard response
+```
 
 ## SigNoz Dashboard Guide
 
-### 1. Truy cập Dashboard
-1. Mở http://localhost:3301
-2. Đợi vài giây để SigNoz khởi động hoàn toàn
-3. Không cần login cho local setup
+### 1. Accessing Dashboard
 
-### 2. Các tab chính
+1. **Open**: http://localhost:8080
+2. **Wait**: Few seconds for complete loading
+3. **No Login**: Required for local setup
 
-#### Services Tab
-- Hiển thị `titanic-api` service
-- Metrics: Throughput, Error Rate, Latency (P99, P95, P50)
-- Service map: Dependencies giữa các services
+### 2. Dashboard Navigation
 
-#### Metrics Tab  
-Các metrics được thu thập:
-- `predictions_total`: Tổng số predictions
-- `prediction_duration_seconds`: Thời gian xử lý
-- `model_confidence_score`: Confidence của model
-- `system_cpu_usage_percent`: CPU usage
-- `system_memory_usage_percent`: Memory usage
-- `api_error_rate`: Tỷ lệ lỗi API
+#### 📊 Services Tab
+- **Overview**: Service health và performance metrics
+- **Metrics displayed**:
+  - Throughput (requests/second)
+  - Error Rate (percentage)
+  - Latency (P99, P95, P50 percentiles)
+  - Service dependencies map
 
-#### Traces Tab
-- Distributed tracing cho từng request
-- Click vào trace để xem chi tiết
-- Flamegraph visualization
+#### 📈 Metrics Tab
+**Custom Metrics được thu thập:**
+- `predictions_total`: Total number of predictions made
+- `prediction_duration_seconds`: Time spent processing predictions  
+- `model_confidence_score`: ML model confidence scores
+- `system_cpu_usage_percent`: System CPU utilization
+- `system_memory_usage_percent`: System memory utilization
+- `api_error_rate`: API error rate percentage
 
-#### Logs Tab
-- Application logs với JSON format
-- Filter theo level: INFO, WARNING, ERROR
-- Search và query logs
+#### 🔍 Traces Tab
+- **Distributed Tracing**: Individual request traces
+- **Trace Details**: Click vào trace để xem chi tiết
+- **Flamegraph**: Visual representation of request flow
+- **Error Traces**: Failed requests với error details
 
-### 3. Tạo Custom Dashboard
+#### 📋 Logs Tab
+- **Application Logs**: JSON formatted logs từ API
+- **System Logs**: Container và infrastructure logs
+- **Filter Options**:
+  - `level="ERROR"` - Error logs only
+  - `message contains "prediction"` - Prediction-related logs
+  - `service="titanic-api"` - API service logs only
 
-1. Đi tới **Dashboards** → **New Dashboard**
-2. Add Panel với queries:
+### 3. Expected Dashboard Behavior
 
-```promql
-# Request Rate
-rate(predictions_total[5m])
+#### Normal Operation (sau khi chạy traffic generator):
+- **Services Tab**: `titanic-api` service visible với healthy metrics
+- **Request Rate**: ~3 requests/second
+- **Error Rate**: ~10%
+- **Latency**: P95 < 100ms
 
-# Error Rate  
-api_error_rate
+#### During Error Simulation:
+- **Error Rate**: Spike to >50%
+- **Error Logs**: Increased error entries trong Logs tab
+- **Error Traces**: Failed requests visible trong Traces tab
 
-# Average Confidence
-avg(model_confidence_score)
+## Video Demo Requirements
 
-# CPU Usage
-system_cpu_usage_percent
-```
+### 📹 Dashboard Overview Section (30 seconds)
+- **Show**: SigNoz dashboard initial state
+- **Highlight**: Services, Metrics, Traces, Logs tabs
+- **Demonstrate**: Navigation through different sections
 
-## Alert Configuration
+### 📹 Traffic Generation Section (60 seconds)
+- **Command**: `python scripts/traffic_generator.py`
+- **Show**: Real-time script output
+- **Dashboard**: Live metrics updating
+- **Highlight**: Request rate, latency metrics
 
-### 1. Tạo Alert Rules
+### 📹 Error Simulation Section (45 seconds)
+- **Command**: `python scripts/error_simulator.py`
+- **Show**: Error rate spike trong dashboard
+- **Logs**: Error entries appearing trong Logs tab
+- **Traces**: Error traces với stack trace details
 
-Đi tới **Alerts** → **New Rule**:
+### 📹 Log Analysis Section (30 seconds)
+- **Filter**: `level="ERROR"` trong Logs tab
+- **Show**: JSON structured logs
+- **Highlight**: Error messages và timestamps
 
-#### High Error Rate Alert
-```yaml
-Name: high_error_rate
-Query: api_error_rate > 30
-Evaluation: Every 1m for 2m
-Severity: critical
-```
+## Management Commands
 
-#### Low Model Confidence Alert
-```yaml
-Name: low_confidence
-Query: avg(model_confidence_score) < 0.6  
-Evaluation: Every 2m for 5m
-Severity: warning
-```
-
-### 2. Notification Channels
-
-Setup trong **Settings** → **Notification Channels**:
-- Email SMTP
-- Slack Webhook
-- Custom Webhook
-
-## Testing Scenarios
-
-### Scenario 1: Normal Operation
-```bash
-# Start traffic generator
-python scripts/traffic_generator.py
-
-# Monitor dashboard metrics realtime
-# Check logs flowing trong SigNoz Logs tab
-```
-
-### Scenario 2: Error Spike  
-```bash
-# Trigger error simulation
-python scripts/error_simulator.py
-
-# Watch error rate spike trong dashboard
-# Check error logs trong Logs tab
-```
-
-### Scenario 3: Manual Testing
-```bash
-# Manual error trigger
-for i in {1..10}; do
-  curl http://localhost:8000/simulate_error
-  sleep 1
-done
-
-# Manual slow requests
-for i in {1..5}; do
-  curl http://localhost:8000/simulate_slow
-  sleep 2
-done
-```
-
-## Troubleshooting
-
-### SigNoz không khởi động
+### Daily Operations
 
 ```bash
-# Kiểm tra Docker resources
-docker system df
-docker system prune  # Nếu thiếu disk space
+# Start services (if not running)
+cd signoz && docker-compose -f deploy/docker/docker-compose.yaml start && cd ..
+docker-compose start
 
-# Restart SigNoz
-cd signoz
+# Stop services (keep data)
+docker-compose stop
+cd signoz && docker-compose -f deploy/docker/docker-compose.yaml stop && cd ..
+
+# Restart after code changes
 docker-compose down
-./deploy/docker/clickhouse-setup/deploy.sh
-```
-
-### Services conflict
-
-```bash
-# Kiểm tra port conflicts
-netstat -tulpn | grep :3301  # SigNoz port
-netstat -tulpn | grep :8000  # API port
-
-# Stop conflicting services nếu có
-sudo lsof -ti:3301 | xargs kill -9
-```
-
-### API không connect được tới SigNoz
-
-```bash
-# Kiểm tra network
-docker network ls | grep signoz
-
-# Kiểm tra SigNoz OTel Collector
-cd signoz && docker-compose logs otel-collector
-
-# Restart API để reconnect
-cd .. && docker-compose restart
-```
-
-## Log Analysis
-
-### 1. Docker logs
-
-```bash
-# API logs
-docker-compose logs -f titanic-api
-
-# SigNoz logs
-cd signoz && docker-compose logs -f
-```
-
-### 2. SigNoz UI logs
-
-1. **Logs** tab → Filter by service="titanic-api"
-2. Search queries:
-   - `level="ERROR"` - Chỉ errors
-   - `message contains "prediction"` - Prediction logs
-   - `timestamp > "2024-01-01"` - Time range
-
-## Cleanup
-
-```bash
-# Stop API services
-docker-compose down
-
-# Stop SigNoz services
-cd signoz && docker-compose down
-
-# Remove volumes (delete all data)
-docker-compose down -v
-cd signoz && docker-compose down -v
-
-# Remove SigNoz folder (nếu cần)
-cd .. && rm -rf signoz
-```
-
-## Architecture Overview
-
-```
-┌─────────────────┐    ┌──────────────────┐    ┌─────────────────┐
-│   Titanic API   │───▶│  OTel Collector  │───▶│   ClickHouse    │
-│   (FastAPI)     │    │   (Metrics,      │    │   (Database)    │
-│                 │    │ Traces, Logs)    │    │                 │
-└─────────────────┘    └──────────────────┘    └─────────────────┘
-         │                        │                        │
-         │                        ▼                        │
-         │              ┌──────────────────┐              │
-         │              │ SigNoz Frontend  │              │
-         │              │   (Dashboard)    │              │
-         │              └──────────────────┘              │
-         │                        │                        │
-         └────────────────────────┼────────────────────────┘
-                                  ▼
-                        ┌──────────────────┐
-                        │ SigNoz Query     │
-                        │    Service       │
-                        └──────────────────┘
-```
-
-## Quick Start Commands
-
-```bash
-# 1. Clone repositories
-git clone <repo-url>
-cd CS317-Lab3-SigNoz
-git clone https://github.com/SigNoz/signoz.git
-
-# 2. Setup SigNoz
-cd signoz
-./deploy/docker/clickhouse-setup/deploy.sh
-cd ..
-
-# 3. Start API
+docker-compose build --no-cache titanic-api
 docker-compose up -d
 
-# 4. Test
+# Check logs
+docker-compose logs -f titanic-api
+cd signoz && docker-compose -f deploy/docker/docker-compose.yaml logs signoz && cd ..
+```
+
+### Health Checks
+
+```bash
+# Check all container status
+docker ps --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
+
+# API health check
 curl http://localhost:8000/health
 
-# 5. Generate traffic
-pip install requests
-python scripts/traffic_generator.py
+# System metrics
+curl http://localhost:8000/metrics/system
 
-# 6. Open dashboard
-# Browser: http://localhost:3301
+# Test prediction endpoint
+curl -X POST http://localhost:8000/predict \
+  -H "Content-Type: application/json" \
+  -d '{"Pclass":1,"Sex":"female","Age":25,"SibSp":0,"Parch":0,"Fare":50,"Embarked":"S"}'
 ```
 
-## Alternative: Lightweight Setup (Nếu SigNoz quá nặng)
+## Performance Baseline
 
-Nếu SigNoz quá tốn resources, có thể dùng stack nhẹ hơn:
+### Expected Metrics (Normal Operation)
+- **Throughput**: 3 requests/second
+- **Error Rate**: ~10%
+- **P95 Latency**: <100ms
+- **CPU Usage**: <20%
+- **Memory Usage**: <50%
 
-```bash
-# Chạy alternative stack
-docker-compose -f docker-compose-lite.yml up -d
-
-# Access:
-# - Prometheus: http://localhost:9090
-# - Grafana: http://localhost:3000 (admin/admin)
-```
-
-## Video Demo Checklist
-
-- [ ] **Setup**: Show clone SigNoz + deploy process
-- [ ] **Dashboard Overview**: SigNoz UI với metrics panels
-- [ ] **Traffic Generation**: `python scripts/traffic_generator.py`
-- [ ] **Error Simulation**: `python scripts/error_simulator.py` 
-- [ ] **Log Analysis**: Filter logs trong SigNoz
-- [ ] **Trace Deep Dive**: Click trace details
-- [ ] **Alert Setup**: Create và test alert rules
-
-## Support
-
-**Common Issues:**
-- **Port 3301 đã được sử dụng**: `sudo lsof -ti:3301 | xargs kill -9`
-- **Out of memory**: Tăng Docker memory limit hoặc dùng lightweight setup
-- **SigNoz không hiển thị data**: Restart API services để reconnect
-
-**Folder structure check:**
-```bash
-ls -la
-# Should see: app/, scripts/, signoz/, docker-compose.yml
-```
-
----
-
-**Note**: 
-- SigNoz setup cần 4GB+ RAM
-- Lần đầu chạy sẽ download ~2GB Docker images
-- Project đã có sẵn model và scripts, chỉ cần clone SigNoz thêm!
+### Resource Usage
+- **Total RAM**: ~2-3GB
+- **Disk Space**: ~1GB for logs/data
+- **Network**: Minimal (local containers)
