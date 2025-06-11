@@ -1,0 +1,18 @@
+version: '3.8'
+
+services:
+  titanic-api:
+    build: .
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./logs:/app/logs
+    environment:
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://host.docker.internal:4317
+      - OTEL_SERVICE_NAME=titanic-api
+      - OTEL_SERVICE_VERSION=1.0.0
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+volumes:
+  logs:
