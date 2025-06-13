@@ -45,7 +45,7 @@ Dự án Lab 3 triển khai hệ thống monitoring, logging và alerting cho AP
 - **SigNoz v0.87.0**: All-in-one observability platform
 - **ClickHouse 24.1.2**: Database lưu trữ metrics, logs, traces
 - **OpenTelemetry**: Instrumentation library
-- **Zookeeper 3.7.1**: Service coordination
+
 
 
 ## Yêu cầu hệ thống
