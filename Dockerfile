@@ -11,9 +11,7 @@ RUN apt-get update && apt-get install -y \
 # Copy requirements and install Python dependencies first
 COPY requirements.txt .
 # Nâng cấp scikit-learn lên phiên bản phù hợp với model
-RUN pip install --no-cache-dir -r requirements.txt \
-    && pip install --no-cache-dir scikit-learn==1.6.1 \
-    && pip install --no-cache-dir requests==2.32.3
+RUN pip install --no-cache-dir -r requirements.txt 
 
 # Copy application code and model
 COPY main.py .

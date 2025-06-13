@@ -9,6 +9,7 @@ import logging
 from datetime import datetime
 import requests
 import json
+import syslog
 from typing import Dict, Any
 
 # OpenTelemetry imports
@@ -33,24 +34,40 @@ SERVICE_VERSION = os.getenv("OTEL_SERVICE_VERSION", "1.0.0")
 # Create logs directory
 os.makedirs('/app/logs', exist_ok=True)
 
-# Configure logging
+# Configure syslog logging (if available)
+try:
+    syslog.openlog("titanic-api", syslog.LOG_PID, syslog.LOG_USER)
+    SYSLOG_AVAILABLE = True
+except:
+    SYSLOG_AVAILABLE = False
+
+# Configure logging với JSON format cho SigNoz
 logging.basicConfig(
     level=logging.INFO,
-    format='{"timestamp": "%(asctime)s", "level": "%(levelname)s", "message": "%(message)s", "service": "' + SERVICE_NAME + '"}',
+    format='{"timestamp": "%(asctime)s", "level": "%(levelname)s", "message": "%(message)s", "service": "' + SERVICE_NAME + '", "version": "' + SERVICE_VERSION + '"}',
     handlers=[
         logging.FileHandler('/app/logs/app.log'),
-        logging.StreamHandler()
+        logging.StreamHandler()  # stdout logs
     ]
 )
 logger = logging.getLogger(__name__)
 
+def log_to_syslog(message, priority=syslog.LOG_INFO):
+    """Log to syslog if available"""
+    if SYSLOG_AVAILABLE:
+        try:
+            syslog.syslog(priority, f"titanic-api: {message}")
+        except:
+            pass
+
 # Configure OpenTelemetry
 resource = Resource.create({
     "service.name": SERVICE_NAME, 
-    "service.version": SERVICE_VERSION
+    "service.version": SERVICE_VERSION,
+    "deployment.environment": "development"
 })
 
-# Tracing
+# Tracing setup
 trace.set_tracer_provider(TracerProvider(resource=resource))
 tracer_provider = trace.get_tracer_provider()
 otlp_exporter = OTLPSpanExporter(
@@ -60,13 +77,13 @@ otlp_exporter = OTLPSpanExporter(
 span_processor = BatchSpanProcessor(otlp_exporter)
 tracer_provider.add_span_processor(span_processor)
 
-# Metrics  
+# Metrics setup
 metric_reader = PeriodicExportingMetricReader(
     OTLPMetricExporter(
         endpoint=OTEL_ENDPOINT,
         insecure=True,
     ),
-    export_interval_millis=10000,  # Increased to 10 seconds
+    export_interval_millis=5000,  # 5 seconds for faster updates
 )
 metrics.set_meter_provider(MeterProvider(resource=resource, metric_readers=[metric_reader]))
 
@@ -74,7 +91,7 @@ metrics.set_meter_provider(MeterProvider(resource=resource, metric_readers=[metr
 tracer = trace.get_tracer(__name__)
 meter = metrics.get_meter(__name__)
 
-# Create custom metrics
+# Core prediction metrics
 prediction_counter = meter.create_counter(
     name="predictions_total",
     description="Total number of predictions made",
@@ -92,18 +109,33 @@ model_confidence = meter.create_histogram(
     unit="1",
 )
 
-# Fixed: Observable gauge callbacks with improved error handling
+# HTTP request metrics
+http_requests_total = meter.create_counter(
+    name="http_requests_total",
+    description="Total HTTP requests",
+)
+
+http_request_duration = meter.create_histogram(
+    name="http_request_duration_seconds", 
+    description="HTTP request duration",
+    unit="s",
+)
+
+http_errors_total = meter.create_counter(
+    name="http_errors_total",
+    description="Total HTTP errors",
+)
+
+# System metrics callbacks với error handling
 def get_cpu_usage(options):
-    """Fixed callback function for CPU usage"""
     try:
-        cpu_percent = psutil.cpu_percent(interval=0.1)  # Short interval
+        cpu_percent = psutil.cpu_percent(interval=0.1)
         return [Observation(cpu_percent)]
     except Exception as e:
         logger.error(f"Error getting CPU usage: {e}")
         return [Observation(0.0)]
 
 def get_memory_usage(options):
-    """Fixed callback function for memory usage"""
     try:
         memory_percent = psutil.virtual_memory().percent
         return [Observation(memory_percent)]
@@ -112,7 +144,6 @@ def get_memory_usage(options):
         return [Observation(0.0)]
 
 def get_disk_usage(options):
-    """Callback function for disk usage"""
     try:
         disk_percent = psutil.disk_usage('/').percent
         return [Observation(disk_percent)]
@@ -120,7 +151,43 @@ def get_disk_usage(options):
         logger.error(f"Error getting disk usage: {e}")
         return [Observation(0.0)]
 
-# System metrics with fixed callbacks
+def get_disk_read_bytes(options):
+    try:
+        disk_io = psutil.disk_io_counters()
+        if disk_io:
+            return [Observation(disk_io.read_bytes)]
+        return [Observation(0.0)]
+    except Exception as e:
+        logger.error(f"Error getting disk read bytes: {e}")
+        return [Observation(0.0)]
+
+def get_disk_write_bytes(options):
+    try:
+        disk_io = psutil.disk_io_counters()
+        if disk_io:
+            return [Observation(disk_io.write_bytes)]
+        return [Observation(0.0)]
+    except Exception as e:
+        logger.error(f"Error getting disk write bytes: {e}")
+        return [Observation(0.0)]
+
+def get_network_sent(options):
+    try:
+        network = psutil.net_io_counters()
+        return [Observation(network.bytes_sent)]
+    except Exception as e:
+        logger.error(f"Error getting network sent: {e}")
+        return [Observation(0.0)]
+
+def get_network_recv(options):
+    try:
+        network = psutil.net_io_counters()
+        return [Observation(network.bytes_recv)]
+    except Exception as e:
+        logger.error(f"Error getting network received: {e}")
+        return [Observation(0.0)]
+
+# System metrics (No GPU)
 system_cpu_gauge = meter.create_observable_gauge(
     name="system_cpu_usage_percent",
     description="System CPU usage percentage",
@@ -142,48 +209,175 @@ system_disk_gauge = meter.create_observable_gauge(
     callbacks=[get_disk_usage]
 )
 
-# FastAPI app
+system_disk_read = meter.create_observable_counter(
+    name="system_disk_read_bytes",
+    description="Disk read bytes",
+    unit="bytes",
+    callbacks=[get_disk_read_bytes]
+)
+
+system_disk_write = meter.create_observable_counter(
+    name="system_disk_write_bytes",
+    description="Disk write bytes",
+    unit="bytes",
+    callbacks=[get_disk_write_bytes]
+)
+
+system_network_sent = meter.create_observable_counter(
+    name="system_network_bytes_sent",
+    description="System network bytes sent",
+    unit="bytes",
+    callbacks=[get_network_sent]
+)
+
+system_network_recv = meter.create_observable_counter(
+    name="system_network_bytes_recv", 
+    description="System network bytes received",
+    unit="bytes",
+    callbacks=[get_network_recv]
+)
+
+# Global variables for tracking metrics
+request_count = 0
+error_count = 0
+recent_predictions = []
+service_start_time = time.time()
+
+def get_current_error_rate():
+    global request_count, error_count
+    if request_count == 0:
+        return 0.0
+    return (error_count / request_count) * 100
+
+def get_requests_per_second():
+    global request_count, service_start_time
+    elapsed = time.time() - service_start_time
+    if elapsed == 0:
+        return 0.0
+    return request_count / elapsed
+
+def get_error_rate(options):
+    try:
+        error_rate = get_current_error_rate()
+        return [Observation(error_rate)]
+    except Exception as e:
+        logger.error(f"Error getting error rate: {e}")
+        return [Observation(0.0)]
+
+def get_request_rate(options):
+    try:
+        request_rate = get_requests_per_second()
+        return [Observation(request_rate)]
+    except Exception as e:
+        logger.error(f"Error getting request rate: {e}")
+        return [Observation(0.0)]
+
+def get_avg_confidence(options):
+    global recent_predictions
+    try:
+        if len(recent_predictions) > 0:
+            avg_confidence = sum(recent_predictions) / len(recent_predictions)
+            return [Observation(avg_confidence)]
+        return [Observation(1.0)]
+    except Exception as e:
+        logger.error(f"Error getting average confidence: {e}")
+        return [Observation(1.0)]
+
+api_error_rate_gauge = meter.create_observable_gauge(
+    name="api_error_rate_percent",
+    description="API error rate percentage",
+    unit="%",
+    callbacks=[get_error_rate]
+)
+
+api_request_rate_gauge = meter.create_observable_gauge(
+    name="api_request_rate_per_second",
+    description="API request rate per second",
+    unit="req/s",
+    callbacks=[get_request_rate]
+)
+
+model_avg_confidence_gauge = meter.create_observable_gauge(
+    name="model_avg_confidence_score",
+    description="Average model confidence score",
+    unit="1",
+    callbacks=[get_avg_confidence]
+)
+
+low_confidence_counter = meter.create_counter(
+    name="low_confidence_predictions",
+    description="Number of predictions with confidence < 0.6",
+)
+
+high_confidence_counter = meter.create_counter(
+    name="high_confidence_predictions", 
+    description="Number of predictions with confidence > 0.9",
+)
+
 app = FastAPI(
-    title="Titanic Survival Prediction API with Monitoring",
-    description="API dự đoán khả năng sống sót trên Titanic với monitoring và logging",
+    title="Titanic Survival Prediction API with SigNoz Monitoring",
+    description="API dự đoán khả năng sống sót trên Titanic với monitoring và logging đầy đủ",
     version=SERVICE_VERSION
 )
 
-# Startup and shutdown events
 @app.on_event("startup")
 async def startup_event():
-    """Verify SigNoz connection on startup"""
-    logger.info(f"Starting {SERVICE_NAME} v{SERVICE_VERSION}")
-    logger.info(f"OpenTelemetry endpoint: {OTEL_ENDPOINT}")
-    
+    startup_message = f"🚀 Starting {SERVICE_NAME} v{SERVICE_VERSION}"
+    logger.info(startup_message)
+    log_to_syslog(startup_message)
+    logger.info(f"📡 OpenTelemetry endpoint: {OTEL_ENDPOINT}")
     try:
         cpu_percent = psutil.cpu_percent(interval=1)
         memory_percent = psutil.virtual_memory().percent
-        logger.info(f"System check - CPU: {cpu_percent}%, Memory: {memory_percent}%")
+        disk_percent = psutil.disk_usage('/').percent
+        health_message = f"💻 System health - CPU: {cpu_percent}%, Memory: {memory_percent}%, Disk: {disk_percent}%"
+        logger.info(health_message)
+        log_to_syslog(health_message)
+        if 'model' in globals():
+            model_message = "🤖 ML Model loaded successfully"
+            logger.info(model_message)
+            log_to_syslog(model_message)
+        else:
+            error_message = "❌ ML Model not loaded"
+            logger.error(error_message)
+            log_to_syslog(error_message, syslog.LOG_ERR)
     except Exception as e:
-        logger.error(f"System check failed: {e}")
+        error_message = f"❌ Startup check failed: {e}"
+        logger.error(error_message)
+        log_to_syslog(error_message, syslog.LOG_ERR)
 
 @app.on_event("shutdown")
 async def shutdown_event():
-    """Cleanup on shutdown"""
-    logger.info(f"Shutting down {SERVICE_NAME}")
+    global request_count, error_count, service_start_time
+    shutdown_message = f"🛑 Shutting down {SERVICE_NAME}"
+    logger.info(shutdown_message)
+    log_to_syslog(shutdown_message)
+    uptime = time.time() - service_start_time
+    avg_rps = request_count / uptime if uptime > 0 else 0
+    stats_message = f"📊 Final stats - Requests: {request_count}, Errors: {error_count}, Uptime: {uptime:.1f}s, Avg RPS: {avg_rps:.2f}"
+    logger.info(stats_message)
+    log_to_syslog(stats_message)
 
-# Instrument FastAPI
 FastAPIInstrumentor.instrument_app(app, tracer_provider=tracer_provider)
 RequestsInstrumentor().instrument()
 
 MODEL_PATH = "best_rf_model.pkl"
 
-# Load model
 if not os.path.exists(MODEL_PATH):
-    logger.error(f"Model file '{MODEL_PATH}' not found")
+    error_message = f"❌ Model file '{MODEL_PATH}' not found"
+    logger.error(error_message)
+    log_to_syslog(error_message, syslog.LOG_ERR)
     raise RuntimeError(f"Model file '{MODEL_PATH}' not found")
 
 try:
     model = joblib.load(MODEL_PATH)
-    logger.info("Model loaded successfully")
+    success_message = f"✅ Model loaded successfully from {MODEL_PATH}"
+    logger.info(success_message)
+    log_to_syslog(success_message)
 except Exception as e:
-    logger.error(f"Could not load model: {e}")
+    error_message = f"❌ Could not load model: {e}"
+    logger.error(error_message)
+    log_to_syslog(error_message, syslog.LOG_ERR)
     raise RuntimeError(f"Could not load model: {e}")
 
 class Passenger(BaseModel):
@@ -195,216 +389,197 @@ class Passenger(BaseModel):
     Fare: float = Field(..., ge=0, description="Passenger fare")
     Embarked: str = Field(..., description="Port of embarkation (C, Q, or S)")
 
+@app.middleware("http")
+async def track_requests(request, call_next):
+    global request_count, error_count
+    request_start_time = time.time()
+    request_count += 1
+    http_requests_total.add(1, {
+        "method": request.method,
+        "endpoint": request.url.path
+    })
+    try:
+        response = await call_next(request)
+        duration = time.time() - request_start_time
+        http_request_duration.record(duration, {
+            "method": request.method,
+            "endpoint": request.url.path,
+            "status_code": str(response.status_code)
+        })
+        if response.status_code >= 400:
+            error_count += 1
+            http_errors_total.add(1, {
+                "method": request.method,
+                "endpoint": request.url.path,
+                "status_code": str(response.status_code)
+            })
+            error_message = f"HTTP {response.status_code} error on {request.method} {request.url.path}"
+            log_to_syslog(error_message, syslog.LOG_WARNING)
+        return response
+    except Exception as e:
+        error_count += 1
+        duration = time.time() - request_start_time
+        http_errors_total.add(1, {
+            "method": request.method,
+            "endpoint": request.url.path,
+            "error": type(e).__name__
+        })
+        error_message = f"❌ Unhandled request error: {e}"
+        logger.error(error_message)
+        log_to_syslog(error_message, syslog.LOG_ERR)
+        raise
+
 @app.get("/")
 def root():
-    logger.info("Root endpoint accessed")
+    logger.info("📍 Root endpoint accessed")
     return {
         "message": "Titanic Survival Prediction API", 
         "status": "running",
         "service": SERVICE_NAME,
-        "version": SERVICE_VERSION
+        "version": SERVICE_VERSION,
+        "monitoring": {
+            "syslog": SYSLOG_AVAILABLE,
+            "tracing": True,
+            "metrics": True
+        },
+        "endpoints": {
+            "predict": "/predict",
+            "health": "/health",
+            "docs": "/docs",
+            "metrics": "/metrics/system"
+        }
     }
 
 @app.get("/health")
 def health_check():
-    """Health check endpoint"""
+    global request_count, error_count, service_start_time
     with tracer.start_as_current_span("health_check") as span:
         try:
-            cpu_percent = psutil.cpu_percent(interval=1)
+            cpu_percent = psutil.cpu_percent(interval=0.5)
             memory = psutil.virtual_memory()
             disk = psutil.disk_usage('/')
-            
+            disk_io = psutil.disk_io_counters()
+            network = psutil.net_io_counters()
             span.set_attribute("cpu_usage", cpu_percent)
             span.set_attribute("memory_usage", memory.percent)
             span.set_attribute("disk_usage", disk.percent)
-            
-            logger.info(f"Health check - CPU: {cpu_percent}%, Memory: {memory.percent}%")
-            
-            return {
+            uptime = time.time() - service_start_time
+            rps = request_count / uptime if uptime > 0 else 0
+            error_rate = get_current_error_rate()
+            health_data = {
                 "status": "healthy",
                 "timestamp": datetime.now().isoformat(),
                 "service": SERVICE_NAME,
                 "version": SERVICE_VERSION,
+                "uptime_seconds": round(uptime, 1),
                 "system": {
-                    "cpu_usage": f"{cpu_percent}%",
-                    "memory_usage": f"{memory.percent}%",
-                    "disk_usage": f"{disk.percent}%"
+                    "cpu_usage_percent": round(cpu_percent, 1),
+                    "memory_usage_percent": round(memory.percent, 1),
+                    "disk_usage_percent": round(disk.percent, 1),
+                    "disk_io": {
+                        "read_bytes": disk_io.read_bytes if disk_io else 0,
+                        "write_bytes": disk_io.write_bytes if disk_io else 0
+                    },
+                    "network": {
+                        "bytes_sent": network.bytes_sent,
+                        "bytes_recv": network.bytes_recv
+                    }
+                },
+                "api": {
+                    "total_requests": request_count,
+                    "total_errors": error_count,
+                    "error_rate_percent": round(error_rate, 2),
+                    "requests_per_second": round(rps, 2)
+                },
+                "model": {
+                    "status": "loaded",
+                    "recent_predictions": len(recent_predictions)
+                },
+                "logging": {
+                    "syslog_available": SYSLOG_AVAILABLE,
+                    "file_logging": True,
+                    "stdout_logging": True
                 }
             }
+            health_message = f"💚 Health check OK - CPU: {cpu_percent:.1f}%, Memory: {memory.percent:.1f}%, RPS: {rps:.2f}"
+            logger.info(health_message)
+            log_to_syslog(health_message)
+            return health_data
         except Exception as e:
-            logger.error(f"Health check error: {e}")
+            span.set_attribute("error", str(e))
+            error_message = f"❌ Health check error: {e}"
+            logger.error(error_message)
+            log_to_syslog(error_message, syslog.LOG_ERR)
             return {
                 "status": "degraded",
                 "timestamp": datetime.now().isoformat(),
-                "error": str(e)
+                "error": str(e),
+                "service": SERVICE_NAME
             }
-
-@app.get("/metrics/system")
-def get_system_metrics():
-    """Get detailed system metrics"""
-    with tracer.start_as_current_span("system_metrics"):
-        try:
-            cpu_percent = psutil.cpu_percent(interval=1)
-            memory = psutil.virtual_memory()
-            disk = psutil.disk_usage('/')
-            network = psutil.net_io_counters()
-            
-            metrics_data = {
-                "timestamp": datetime.now().isoformat(),
-                "service": SERVICE_NAME,
-                "cpu": {
-                    "usage_percent": cpu_percent,
-                    "count": psutil.cpu_count()
-                },
-                "memory": {
-                    "total": memory.total,
-                    "available": memory.available,
-                    "percent": memory.percent,
-                    "used": memory.used
-                },
-                "disk": {
-                    "total": disk.total,
-                    "used": disk.used,
-                    "free": disk.free,
-                    "percent": disk.percent
-                },
-                "network": {
-                    "bytes_sent": network.bytes_sent,
-                    "bytes_recv": network.bytes_recv,
-                    "packets_sent": network.packets_sent,
-                    "packets_recv": network.packets_recv
-                }
-            }
-            
-            logger.info(f"System metrics collected: CPU {cpu_percent}%, Memory {memory.percent}%")
-            return metrics_data
-        except Exception as e:
-            logger.error(f"Error collecting system metrics: {e}")
-            raise HTTPException(status_code=500, detail=f"Error collecting metrics: {e}")
-
-# Global variables for tracking metrics
-request_count = 0
-error_count = 0
-recent_predictions = []
-
-def get_current_error_rate():
-    """Calculate current error rate"""
-    global request_count, error_count
-    if request_count == 0:
-        return 0.0
-    return (error_count / request_count) * 100
-
-# Fixed alerting metrics callbacks
-def get_error_rate(options):
-    """Fixed callback for error rate"""
-    try:
-        error_rate = get_current_error_rate()
-        return [Observation(error_rate)]
-    except Exception as e:
-        logger.error(f"Error getting error rate: {e}")
-        return [Observation(0.0)]
-
-def get_high_error_alert(options):
-    """Fixed callback for high error rate alert"""
-    try:
-        global request_count
-        error_rate = get_current_error_rate()
-        alert_value = 1.0 if error_rate > 50 and request_count >= 10 else 0.0
-        return [Observation(alert_value)]
-    except Exception as e:
-        logger.error(f"Error getting high error alert: {e}")
-        return [Observation(0.0)]
-
-def get_low_confidence_alert(options):
-    """Callback for low confidence alert"""
-    try:
-        global recent_predictions
-        avg_confidence = sum(recent_predictions) / len(recent_predictions) if recent_predictions else 1.0
-        alert_value = 1.0 if avg_confidence < 0.6 and len(recent_predictions) >= 5 else 0.0
-        return [Observation(alert_value)]
-    except Exception as e:
-        logger.error(f"Error getting low confidence alert: {e}")
-        return [Observation(0.0)]
-
-# Add alerting metrics that SigNoz can use for alerts
-error_rate_gauge = meter.create_observable_gauge(
-    name="api_error_rate",
-    description="API error rate percentage",
-    unit="%",
-    callbacks=[get_error_rate]
-)
-
-low_confidence_counter = meter.create_counter(
-    name="low_confidence_predictions",
-    description="Number of predictions with confidence < 0.6",
-)
-
-high_error_rate_gauge = meter.create_observable_gauge(
-    name="high_error_rate_alert",
-    description="Alert when error rate > 50%",
-    unit="1",
-    callbacks=[get_high_error_alert]
-)
-
-low_confidence_alert_gauge = meter.create_observable_gauge(
-    name="low_confidence_alert",
-    description="Alert when average confidence < 0.6",
-    unit="1", 
-    callbacks=[get_low_confidence_alert]
-)
 
 @app.post("/predict")
 def predict(passenger: Passenger):
-    """Predict survival probability with SigNoz alerting metrics"""
-    global request_count, error_count, recent_predictions
-    
+    global recent_predictions
     with tracer.start_as_current_span("prediction") as span:
-        start_time = time.time()
-        request_count += 1
-        
+        prediction_start_time = time.time()
         try:
-            # Add passenger data to span
+            if passenger.Sex.lower() not in ['male', 'female']:
+                raise ValueError("Sex must be 'male' or 'female'")
+            if passenger.Embarked.upper() not in ['C', 'Q', 'S']:
+                raise ValueError("Embarked must be 'C', 'Q', or 'S'")
             span.set_attribute("passenger.class", passenger.Pclass)
             span.set_attribute("passenger.sex", passenger.Sex)
             span.set_attribute("passenger.age", passenger.Age)
-            
-            # Convert to DataFrame
-            X = pd.DataFrame([passenger.dict()])
-            
-            # Make prediction
+            span.set_attribute("passenger.fare", passenger.Fare)
+            input_data = {
+                'Pclass': passenger.Pclass,
+                'Sex': 1 if passenger.Sex.lower() == 'male' else 0,
+                'Age': passenger.Age,
+                'SibSp': passenger.SibSp,
+                'Parch': passenger.Parch,
+                'Fare': passenger.Fare,
+                'Embarked_Q': 1 if passenger.Embarked.upper() == 'Q' else 0,
+                'Embarked_S': 1 if passenger.Embarked.upper() == 'S' else 0
+            }
+            X = pd.DataFrame([input_data])
             pred = model.predict(X)[0]
             pred_proba = model.predict_proba(X)[0]
-            
-            # Calculate confidence (max probability)
             confidence = float(max(pred_proba))
-            
-            # Processing time
-            processing_time = time.time() - start_time
-            
-            # Record metrics
-            prediction_counter.add(1, {"model": "random_forest", "result": str(pred)})
+            processing_time = time.time() - prediction_start_time
+            result = "Sống sót" if pred == 1 else "Không sống sót"
+            prediction_counter.add(1, {
+                "model": "random_forest", 
+                "result": str(pred),
+                "passenger_class": str(passenger.Pclass)
+            })
             prediction_duration.record(processing_time)
             model_confidence.record(confidence)
-            
-            # Add to span
+            if confidence < 0.6:
+                low_confidence_counter.add(1)
+                warning_message = f"⚠️ Low confidence prediction: {confidence:.3f}"
+                logger.warning(warning_message)
+                log_to_syslog(warning_message, syslog.LOG_WARNING)
+            elif confidence > 0.9:
+                high_confidence_counter.add(1)
+            recent_predictions.append(confidence)
+            recent_predictions = recent_predictions[-20:]
             span.set_attribute("prediction.result", int(pred))
             span.set_attribute("prediction.confidence", confidence)
             span.set_attribute("prediction.processing_time", processing_time)
-            
-            result = "Sống sót" if pred == 1 else "Không sống sót"
-            
-            logger.info(f"Prediction made: {result}, confidence: {confidence:.3f}, processing_time: {processing_time:.3f}s")
-            
-            # Track recent predictions for confidence monitoring
-            recent_predictions.append(confidence)
-            recent_predictions = recent_predictions[-20:]  # Keep last 20 predictions
-            
-            # Check for low confidence
-            if confidence < 0.6:
-                low_confidence_counter.add(1)
-                logger.warning(f"Low confidence prediction: {confidence:.3f}")
-            
-            return {
+            span.set_attribute("prediction.text", result)
+            log_data = {
+                "event": "prediction_made",
+                "result": result,
+                "confidence": round(confidence, 3),
+                "processing_time": round(processing_time, 3),
+                "passenger_class": passenger.Pclass,
+                "passenger_age": passenger.Age,
+                "passenger_sex": passenger.Sex
+            }
+            logger.info(json.dumps(log_data))
+            syslog_message = f"Prediction: {result}, Confidence: {confidence:.3f}, Time: {processing_time:.3f}s"
+            log_to_syslog(syslog_message)
+            response = {
                 "prediction": result,
                 "confidence": round(confidence, 3),
                 "processing_time": round(processing_time, 3),
@@ -412,98 +587,148 @@ def predict(passenger: Passenger):
                     "not_survived": round(float(pred_proba[0]), 3),
                     "survived": round(float(pred_proba[1]), 3)
                 },
+                "passenger_info": {
+                    "class": passenger.Pclass,
+                    "sex": passenger.Sex,
+                    "age": passenger.Age
+                },
                 "service": SERVICE_NAME,
                 "timestamp": datetime.now().isoformat()
             }
-            
+            return response
+        except ValueError as e:
+            span.set_attribute("error", str(e))
+            span.set_attribute("error.type", "ValidationError")
+            error_message = f"❌ Validation error: {e}"
+            logger.error(error_message)
+            log_to_syslog(error_message, syslog.LOG_ERR)
+            raise HTTPException(status_code=422, detail=f"Validation error: {e}")
         except Exception as e:
-            error_count += 1
+            processing_time = time.time() - prediction_start_time
             span.set_attribute("error", str(e))
             span.set_attribute("error.type", type(e).__name__)
-            logger.error(f"Prediction error: {e}")
-            raise HTTPException(status_code=400, detail=f"Prediction error: {e}")
+            span.set_attribute("processing_time", processing_time)
+            error_message = f"❌ Prediction error: {e}"
+            logger.error(error_message, exc_info=True)
+            log_to_syslog(error_message, syslog.LOG_ERR)
+            raise HTTPException(status_code=500, detail=f"Prediction error: {e}")
 
-@app.get("/simulate_error")
+@app.post("/simulate_error")
 def simulate_error():
-    """Simulate an error for testing"""
-    global error_count, request_count
-    error_count += 1
-    request_count += 1
-    
     with tracer.start_as_current_span("simulate_error") as span:
         span.set_attribute("error.simulated", True)
         span.set_attribute("error.type", "SimulatedError")
-        logger.error("Simulated error endpoint called")
-        raise HTTPException(status_code=500, detail="This is a simulated error for testing")
-
-@app.get("/simulate_slow")
-def simulate_slow():
-    """Simulate a slow response for testing"""
-    global request_count
-    request_count += 1
-    
-    with tracer.start_as_current_span("simulate_slow") as span:
-        sleep_time = random.uniform(2, 5)
-        span.set_attribute("sleep_time", sleep_time)
-        logger.warning(f"Simulating slow response: {sleep_time:.2f}s")
-        time.sleep(sleep_time)
-        return {
-            "message": f"Slow response after {sleep_time:.2f} seconds",
-            "service": SERVICE_NAME,
-            "timestamp": datetime.now().isoformat()
+        error_type = random.choice(["server_error", "database_error", "model_error", "timeout"])
+        span.set_attribute("error.subtype", error_type)
+        error_message = f"🚨 Simulated {error_type} for testing alerting system"
+        logger.error(error_message)
+        log_to_syslog(error_message, syslog.LOG_ERR)
+        error_details = {
+            "server_error": "Internal server error occurred",
+            "database_error": "Database connection failed", 
+            "model_error": "Model inference failed",
+            "timeout": "Request timeout exceeded"
         }
+        raise HTTPException(
+            status_code=500, 
+            detail=f"Simulated {error_type}: {error_details.get(error_type, 'Unknown error')}"
+        )
 
-@app.get("/metrics/alerts")
-def get_alert_metrics():
-    """Get current metrics that SigNoz uses for alerting"""
-    global request_count, error_count, recent_predictions
-    
-    current_error_rate = get_current_error_rate()
-    avg_confidence = sum(recent_predictions) / len(recent_predictions) if recent_predictions else 1.0
-    
-    return {
-        "timestamp": datetime.now().isoformat(),
-        "service": SERVICE_NAME,
-        "version": SERVICE_VERSION,
-        "error_rate": current_error_rate,
-        "request_count": request_count,
-        "error_count": error_count,
-        "average_confidence": round(avg_confidence, 3),
-        "recent_predictions_count": len(recent_predictions),
-        "alerting_metrics": {
-            "api_error_rate": current_error_rate,
-            "low_confidence_predictions": sum(1 for c in recent_predictions if c < 0.6),
-            "high_error_rate_alert": 1.0 if current_error_rate > 50 and request_count >= 10 else 0.0,
-            "low_confidence_alert": 1.0 if avg_confidence < 0.6 and len(recent_predictions) >= 5 else 0.0
-        }
-    }
-
-@app.post("/reset-metrics")
-def reset_metrics():
-    """Reset metrics for testing"""
-    global request_count, error_count, recent_predictions
-    request_count = 0
-    error_count = 0
-    recent_predictions = []
-    logger.info("Metrics reset for testing")
-    return {
-        "message": "Metrics reset successfully",
-        "service": SERVICE_NAME,
-        "timestamp": datetime.now().isoformat()
-    }
+@app.get("/metrics/system")
+def get_system_metrics():
+    with tracer.start_as_current_span("system_metrics"):
+        try:
+            cpu_percent = psutil.cpu_percent(interval=1)
+            cpu_count = psutil.cpu_count()
+            memory = psutil.virtual_memory()
+            disk = psutil.disk_usage('/')
+            disk_io = psutil.disk_io_counters()
+            network = psutil.net_io_counters()
+            metrics_data = {
+                "timestamp": datetime.now().isoformat(),
+                "service": SERVICE_NAME,
+                "system": {
+                    "cpu": {
+                        "usage_percent": round(cpu_percent, 2),
+                        "count": cpu_count
+                    },
+                    "memory": {
+                        "total_bytes": memory.total,
+                        "available_bytes": memory.available,
+                        "used_bytes": memory.used,
+                        "usage_percent": round(memory.percent, 2)
+                    },
+                    "disk": {
+                        "total_bytes": disk.total,
+                        "used_bytes": disk.used,
+                        "free_bytes": disk.free,
+                        "usage_percent": round(disk.percent, 2),
+                        "io": {
+                            "read_bytes": disk_io.read_bytes if disk_io else 0,
+                            "write_bytes": disk_io.write_bytes if disk_io else 0,
+                            "read_count": disk_io.read_count if disk_io else 0,
+                            "write_count": disk_io.write_count if disk_io else 0
+                        }
+                    },
+                    "network": {
+                        "bytes_sent": network.bytes_sent,
+                        "bytes_recv": network.bytes_recv,
+                        "packets_sent": network.packets_sent,
+                        "packets_recv": network.packets_recv
+                    }
+                }
+            }
+            logger.info(f"📊 System metrics collected - CPU: {cpu_percent:.1f}%, Memory: {memory.percent:.1f}%")
+            log_to_syslog(f"System metrics - CPU: {cpu_percent:.1f}%, Memory: {memory.percent:.1f}%")
+            return metrics_data
+        except Exception as e:
+            error_message = f"❌ Error collecting system metrics: {e}"
+            logger.error(error_message)
+            log_to_syslog(error_message, syslog.LOG_ERR)
+            raise HTTPException(status_code=500, detail=f"Error collecting metrics: {e}")
 
 @app.get("/info")
 def get_service_info():
-    """Get service information"""
+    global request_count, error_count, service_start_time
+    uptime = time.time() - service_start_time
     return {
         "service": SERVICE_NAME,
         "version": SERVICE_VERSION,
+        "description": "Titanic Survival Prediction API with SigNoz monitoring",
         "otlp_endpoint": OTEL_ENDPOINT,
-        "model_path": MODEL_PATH,
-        "timestamp": datetime.now().isoformat(),
-        "uptime": "Check /health for system status"
+        "model_info": {
+            "path": MODEL_PATH,
+            "type": "Random Forest Classifier (ML - No GPU needed)",
+            "status": "loaded"
+        },
+        "runtime_stats": {
+            "uptime_seconds": round(uptime, 1),
+            "total_requests": request_count,
+            "total_errors": error_count,
+            "requests_per_second": round(request_count / uptime if uptime > 0 else 0, 2)
+        },
+        "monitoring": {
+            "tracing": "enabled",
+            "metrics": "enabled", 
+            "logging": {
+                "file": "enabled",
+                "stdout": "enabled",
+                "stderr": "enabled",
+                "syslog": "enabled" if SYSLOG_AVAILABLE else "not available"
+            },
+            "alerting": "SigNoz native alerting"
+        },
+        "system_monitoring": {
+            "cpu": "enabled",
+            "memory": "enabled",
+            "disk_space": "enabled",
+            "disk_io": "enabled",
+            "network_io": "enabled",
+            "gpu": "not needed (ML model)"
+        },
+        "timestamp": datetime.now().isoformat()
     }
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    uvicorn.run(app, host="0.0.0.0", port=8000, log_level="info")

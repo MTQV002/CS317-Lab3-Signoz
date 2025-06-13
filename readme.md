@@ -62,40 +62,6 @@ ls signoz/deploy/docker/
 # Should show: docker-compose.yaml, otel-collector-config.yaml, etc.
 ```
 
-### 3. Phiên bản thư viện cụ thể
-
-#### Python Dependencies (requirements.txt):
-```txt
-fastapi==0.104.1
-uvicorn==0.24.0
-pydantic==2.5.0
-scikit-learn==1.3.2
-pandas==2.1.4
-joblib==1.3.2
-psutil==5.9.6
-requests==2.31.0
-
-# OpenTelemetry packages
-opentelemetry-api==1.21.0
-opentelemetry-sdk==1.21.0
-opentelemetry-instrumentation==0.42b0
-opentelemetry-instrumentation-fastapi==0.42b0
-opentelemetry-instrumentation-requests==0.42b0
-opentelemetry-exporter-otlp-proto-grpc==1.21.0
-opentelemetry-exporter-otlp-proto-http==1.21.0
-```
-
-#### Docker Images với version cụ thể:
-```yaml
-# SigNoz Services
-signoz/signoz:v0.87.0                        # Query service + Web UI
-signoz/signoz-otel-collector:v0.111.42       # OpenTelemetry Collector
-clickhouse/clickhouse-server:24.1.2-alpine   # Database
-bitnami/zookeeper:3.7.1                      # Coordination service
-
-# Application  
-python:3.11-slim                             # Base image cho API
-```
 
 ## Khởi chạy hệ thống
 

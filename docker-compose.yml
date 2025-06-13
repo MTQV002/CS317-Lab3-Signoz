@@ -7,6 +7,8 @@ services:
       - "8000:8000"
     volumes:
       - ./logs:/app/logs
+      - /var/log:/host/var/log:ro  # Mount host syslog (Linux)
+      # For Windows, use named pipe or skip syslog
     environment:
       - OTEL_EXPORTER_OTLP_ENDPOINT=http://signoz-otel-collector:4317
       - OTEL_SERVICE_NAME=titanic-api
