@@ -1,8 +1,43 @@
+<p align="center">
+  <a href="https://www.uit.edu.vn/" title="Trường Đại học Công nghệ Thông tin" style="border: 5;">
+    <img src="https://i.imgur.com/WmMnSRt.png" alt="Trường Đại học Công nghệ Thông tin | University of Information Technology">
+  </a>
+</p>
+
+
+<!-- Title -->
+<h1 align="center"><b>CS317.P21 - PHÁT TRIỂN VÀ VẬN HÀNH HỆ THỐNG MÁY HỌC</b></h1>
+
+## COURSE INTRODUCTION
+<a name="gioithieumonhoc"></a>
+* *Course Title*: Phát triển và vận hành hệ thống máy học
+* *Course Code*: CS317.P21
+* *Year*: 2024-2025
+
+## ACADEMIC ADVISOR
+<a name="giangvien"></a>
+* *Đỗ Văn Tiến* - tiendv@uit.edu.vn
+* *Lê Trần Trọng Khiêm* - khiemltt@uit.edu.vn
+
+## MEMBERS
+<a name="thanhvien"></a>
+* Từ Minh Phi - 22521080
+* Lê Thành Tiến - 22521467
+* Dương Thành Trí - 22521516
+* Nguyễn Minh Thiện  - 22521391
+* Nguyễn Quốc Vinh - 22521674
+
+
+
+
+
+
 # Lab 3: Monitoring và Logging với SigNoz
+
 
 ## Giới thiệu
 
-Dự án Lab 3 triển khai hệ thống monitoring, logging và alerting cho API dự đoán Titanic sử dụng **SigNoz** - một platform observability all-in-one. SigNoz thay thế cho combo Prometheus + Grafana + ELK Stack với giao diện tích hợp.
+Dự án Lab 3 triển khai hệ thống monitoring, logging và alerting cho API dự đoán Titanic sử dụng **SigNoz** - một platform observability all-in-one.
 
 ## Công nghệ sử dụng
 
@@ -12,11 +47,6 @@ Dự án Lab 3 triển khai hệ thống monitoring, logging và alerting cho AP
 - **OpenTelemetry**: Instrumentation library
 - **Zookeeper 3.7.1**: Service coordination
 
-### Application Stack
-- **FastAPI 0.104.1**: Web framework với OpenTelemetry integration
-- **Scikit-learn 1.3.2**: ML model (Random Forest pre-trained)
-- **Docker 20.10+**: Container runtime
-- **Docker Compose 2.0+**: Container orchestration
 
 ## Yêu cầu hệ thống
 
@@ -74,10 +104,6 @@ cd signoz
 # Start SigNoz services (first time takes 2-3 minutes)
 docker-compose -f deploy/docker/docker-compose.yaml up -d
 
-# Verify SigNoz startup
-echo "Waiting for SigNoz to fully start..."
-sleep 120
-
 # Check SigNoz services
 docker-compose -f deploy/docker/docker-compose.yaml ps
 
@@ -99,7 +125,6 @@ cd ..
 docker-compose up -d
 
 # Verify API startup
-sleep 30
 docker-compose ps
 
 # Expected output:
@@ -147,7 +172,7 @@ curl -s http://localhost:8080 | head -10
 
 | Service | URL | Description | Status |
 |---------|-----|-------------|--------|
-| **🎯 SigNoz Dashboard** | http://localhost:8080 | Complete monitoring interface | ✅ Main Interface |
+| **🎯 SigNoz UI** | http://localhost:8080 | Complete monitoring interface | ✅ Main Interface |
 | **📚 API Documentation** | http://localhost:8000/docs | FastAPI Swagger UI | ✅ Working |
 | **❤️ Health Check** | http://localhost:8000/health | API status endpoint | ✅ Working |
 | **🗄️ ClickHouse** | http://localhost:8123 | Database interface | ✅ Working |
@@ -184,37 +209,8 @@ Final Architecture (Simplified)
 
 ## Demo và Testing
 
-### 1. Manual API Testing
 
-```bash
-# Test single prediction
-curl -X POST "http://localhost:8000/predict" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "Pclass": 3,
-    "Sex": "male", 
-    "Age": 25,
-    "SibSp": 0,
-    "Parch": 0,
-    "Fare": 7.25,
-    "Embarked": "S"
-  }'
-
-# Expected response:
-# {
-#   "prediction": "Không sống sót",
-#   "confidence": 0.892,
-#   "processing_time": 0.045,
-#   "probabilities": {
-#     "not_survived": 0.892,
-#     "survived": 0.108
-#   },
-#   "service": "titanic-api",
-#   "timestamp": "2024-06-11T..."
-# }
-```
-
-### 2. Traffic Generator Script
+### 1. Traffic Generator Script
 
 ```bash
 # Install dependencies (phiên bản cụ thể)
@@ -258,83 +254,21 @@ python scripts/error_simulator.py
 # - Monitors dashboard response
 ```
 
-## SigNoz Dashboard Guide
+## SigNoz Guide
 
-### 1. Accessing Dashboard
+### 1. Accessing Signoz
 
 1. **Open**: http://localhost:8080
 2. **Wait**: Few seconds for complete loading
 3. **No Login**: Required for local setup
 
-### 2. Dashboard Navigation
-
-#### 📊 Services Tab
-- **Overview**: Service health và performance metrics
-- **Metrics displayed**:
-  - Throughput (requests/second)
-  - Error Rate (percentage)
-  - Latency (P99, P95, P50 percentiles)
-  - Service dependencies map
-
-#### 📈 Metrics Tab
-**Custom Metrics được thu thập:**
-- `predictions_total`: Total number of predictions made
-- `prediction_duration_seconds`: Time spent processing predictions  
-- `model_confidence_score`: ML model confidence scores
-- `system_cpu_usage_percent`: System CPU utilization
-- `system_memory_usage_percent`: System memory utilization
-- `api_error_rate`: API error rate percentage
-
-#### 🔍 Traces Tab
-- **Distributed Tracing**: Individual request traces
-- **Trace Details**: Click vào trace để xem chi tiết
-- **Flamegraph**: Visual representation of request flow
-- **Error Traces**: Failed requests với error details
-
-#### 📋 Logs Tab
-- **Application Logs**: JSON formatted logs từ API
-- **System Logs**: Container và infrastructure logs
-- **Filter Options**:
-  - `level="ERROR"` - Error logs only
-  - `message contains "prediction"` - Prediction-related logs
-  - `service="titanic-api"` - API service logs only
-
-### 3. Expected Dashboard Behavior
-
-#### Normal Operation (sau khi chạy traffic generator):
-- **Services Tab**: `titanic-api` service visible với healthy metrics
-- **Request Rate**: ~3 requests/second
-- **Error Rate**: ~10%
-- **Latency**: P95 < 100ms
-
-#### During Error Simulation:
-- **Error Rate**: Spike to >50%
-- **Error Logs**: Increased error entries trong Logs tab
-- **Error Traces**: Failed requests visible trong Traces tab
+### 2. Setup
+- You can read signoz.md to setup dashboard & Alert
 
 ## Video Demo Requirements
 
-### 📹 Dashboard Overview Section (30 seconds)
-- **Show**: SigNoz dashboard initial state
-- **Highlight**: Services, Metrics, Traces, Logs tabs
-- **Demonstrate**: Navigation through different sections
 
-### 📹 Traffic Generation Section (60 seconds)
-- **Command**: `python scripts/traffic_generator.py`
-- **Show**: Real-time script output
-- **Dashboard**: Live metrics updating
-- **Highlight**: Request rate, latency metrics
-
-### 📹 Error Simulation Section (45 seconds)
-- **Command**: `python scripts/error_simulator.py`
-- **Show**: Error rate spike trong dashboard
-- **Logs**: Error entries appearing trong Logs tab
-- **Traces**: Error traces với stack trace details
-
-### 📹 Log Analysis Section (30 seconds)
-- **Filter**: `level="ERROR"` trong Logs tab
-- **Show**: JSON structured logs
-- **Highlight**: Error messages và timestamps
+- **link** :
 
 ## Management Commands
 
@@ -359,34 +293,3 @@ docker-compose logs -f titanic-api
 cd signoz && docker-compose -f deploy/docker/docker-compose.yaml logs signoz && cd ..
 ```
 
-### Health Checks
-
-```bash
-# Check all container status
-docker ps --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
-
-# API health check
-curl http://localhost:8000/health
-
-# System metrics
-curl http://localhost:8000/metrics/system
-
-# Test prediction endpoint
-curl -X POST http://localhost:8000/predict \
-  -H "Content-Type: application/json" \
-  -d '{"Pclass":1,"Sex":"female","Age":25,"SibSp":0,"Parch":0,"Fare":50,"Embarked":"S"}'
-```
-
-## Performance Baseline
-
-### Expected Metrics (Normal Operation)
-- **Throughput**: 3 requests/second
-- **Error Rate**: ~10%
-- **P95 Latency**: <100ms
-- **CPU Usage**: <20%
-- **Memory Usage**: <50%
-
-### Resource Usage
-- **Total RAM**: ~2-3GB
-- **Disk Space**: ~1GB for logs/data
-- **Network**: Minimal (local containers)

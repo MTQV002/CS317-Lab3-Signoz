@@ -8,7 +8,7 @@ def simulate_high_error_rate():
     """Simulate high error rate scenario"""
     print("🚨 Simulating high error rate...")
     
-    for i in range(20):
+    for i in range(2000):
         try:
             # Send error requests
             response = requests.get(f"{API_BASE_URL}/simulate_error", timeout=5)
