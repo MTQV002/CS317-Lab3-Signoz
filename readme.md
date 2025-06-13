@@ -268,7 +268,7 @@ python scripts/error_simulator.py
 ## Video Demo Requirements
 
 
-- **link** :
+- **link** : https://drive.google.com/drive/folders/1Uh_p5mdtGyuKQzaqk7E5zmXX4l1yIuaf
 
 ## Management Commands
 
