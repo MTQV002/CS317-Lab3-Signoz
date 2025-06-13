@@ -531,15 +531,15 @@ def predict(passenger: Passenger):
             span.set_attribute("passenger.sex", passenger.Sex)
             span.set_attribute("passenger.age", passenger.Age)
             span.set_attribute("passenger.fare", passenger.Fare)
+            # Truyền đúng các cột gốc, không one-hot
             input_data = {
                 'Pclass': passenger.Pclass,
-                'Sex': 1 if passenger.Sex.lower() == 'male' else 0,
+                'Sex': passenger.Sex.lower(),
                 'Age': passenger.Age,
                 'SibSp': passenger.SibSp,
                 'Parch': passenger.Parch,
                 'Fare': passenger.Fare,
-                'Embarked_Q': 1 if passenger.Embarked.upper() == 'Q' else 0,
-                'Embarked_S': 1 if passenger.Embarked.upper() == 'S' else 0
+                'Embarked': passenger.Embarked.upper()
             }
             X = pd.DataFrame([input_data])
             pred = model.predict(X)[0]
@@ -633,6 +633,21 @@ def simulate_error():
             status_code=500, 
             detail=f"Simulated {error_type}: {error_details.get(error_type, 'Unknown error')}"
         )
+
+@app.get("/simulate_slow")
+def simulate_slow():
+    with tracer.start_as_current_span("simulate_slow") as span:
+        try:
+            delay = random.uniform(2, 5)
+            span.set_attribute("simulate_slow.delay", delay)
+            time.sleep(delay)
+            logger.info(f"🐌 Simulated slow request with delay {delay:.2f}s")
+            return {"status": "ok", "delay": delay}
+        except Exception as e:
+            error_message = f"❌ Error in simulate_slow: {e}"
+            logger.error(error_message)
+            log_to_syslog(error_message, syslog.LOG_ERR)
+            raise HTTPException(status_code=500, detail=f"Error in simulate_slow: {e}")
 
 @app.get("/metrics/system")
 def get_system_metrics():
